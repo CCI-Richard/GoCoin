@@ -9,12 +9,12 @@ class MainHandler(webapp.RequestHandler):
     	self.response.headers['Access-Control-Allow-Origin'] = 'http://gocoin.org'
         headers = {}
     	for x in self.request.headers:
-        	if (x != "X-Apiurl" and x[0:2] != "Ac"):
+        	if (x != "X-Apiurl" and x[0:2] != "Ac" and x[0:2] != "Re"):
         		headers[x] = self.request.headers[x]
        	r = urlfetch.fetch(self.request.headers["X-Apiurl"], None, "GET", headers, True, True, None, None)
         if (r.status_code != 200):
         	self.response.set_status(r.status_code)
-        	self.response.out.write("Bad request: " + str(r.status_code))
+        	self.response.out.write(str(r.status_code))
         else:
         	self.response.out.write(r.content)
         
@@ -22,12 +22,17 @@ class MainHandler(webapp.RequestHandler):
     	self.response.headers['Access-Control-Allow-Origin'] = 'http://gocoin.org'
         headers = {}
         for x in self.request.headers:
-        	if (x != "X-Apiurl" and x[0:2] != "Ac"):
+        	if (x != "X-Apiurl" and x[0:2] != "Ac" and x[0:2] != "Re" and x[0:2] != "Or"):
         		headers[x] = self.request.headers[x]
+        logging.info(self.request.headers['X-Apiurl'])
+        for x in headers:
+        	logging.info(x + ": " + headers[x])
+        logging.info("\r\n")
+        logging.info(self.request.body)
        	r = urlfetch.fetch(self.request.headers['X-Apiurl'], self.request.body, "POST", headers, True, True, None, None)
         if (r.status_code != 200):
         	self.response.set_status(r.status_code)
-        	self.response.out.write("Bad request: " + str(r.status_code))
+        	self.response.out.write(str(r.status_code))
         else:
         	if ('location' in r.headers):
         		self.response.out.write(r.headers['location'])
@@ -38,15 +43,17 @@ class MainHandler(webapp.RequestHandler):
     	self.response.headers['Access-Control-Allow-Origin'] = 'http://gocoin.org'
         headers = {}
         for x in self.request.headers:
-        	if (x != "X-Apiurl" and x[0:2] != "Ac" and x[0:2] == "Re"):
+        	if (x != "X-Apiurl" and x[0:2] != "Ac" and x[0:2] != "Re"  and x[0:2] != "Us"  and x[0:4] != "Conn"):
         		headers[x] = self.request.headers[x]
         for x in headers:
         	logging.info("-H \"" + x + ": " + headers[x] + "\" ")
-        logging.info("\"" + self.request.headers['X-Apiurl'] + "\"") 
+        logging.info("PUT \"" + self.request.headers['X-Apiurl'] + "\"")
+        logging.info(self.request.body + ""); 
        	r = urlfetch.fetch(self.request.headers['X-Apiurl'], self.request.body, "PUT", headers, True, True, None, None)
-        if (r.status_code != 200):
+        logging.info(r.status_code)
+       	if (r.status_code != 200):
         	self.response.set_status(r.status_code)
-        	self.response.out.write("" + str(r.status_code))
+        	self.response.out.write(str(r.status_code))
         else:
         	if ('location' in r.headers):
         		self.response.out.write(r.headers['location'])
