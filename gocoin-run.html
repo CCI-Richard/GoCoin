@@ -45,13 +45,15 @@
   /* Constants */
   	var crossDomainProxy = 'http://localhost:8082/'; // cross domain proxy|| todo: hardcode this so it can't be hacked
 	var goCoinWalletFilename = 'GoCoin Wallet File';
-  	
+  	var goCoinWalletWorksheetName = 'wallet_data_worksheet';
   	
   /* Variables */
 	var oAuthToken = '';
 	var toaster = null; 
-	var walletDocID = null;		// user's wallet document id (google doc id)
-	
+	var walletDocID = null;			// user's wallet document id (google doc id)
+	var walletWorkSheetID = null;	// user's wallet worksheet id
+	var walletWorkSheetPostURL = null;
+	var userPin = "testPin";
 	
 	/* Call a HTTP GET Google API using oAuth2 authentication.
 	 * 	gaurl 		- API url to call
@@ -130,7 +132,7 @@
 				"X-Apiurl": gaurl,
 				"Authorization": "OAuth " + oAuthToken,
 				"Content-Type": contentType,
-				"Content-Range": "" + uptoByte + "-" + (uptoByte + payload.length) + "/" + contentTotalLength,
+				"Content-Range": "bytes " + uptoByte + "-" + (uptoByte + payload.length - 1) + "/" + contentTotalLength,
 				"X-Requested-With": null
 		}
 		
@@ -178,64 +180,136 @@
 	
 	/* Returns the user's Wallet Document ID
 	 */
-	function getWalletDocID() {
+	function get_wallet_doc(callBack) {
+		d("Searching for user's wallet file...");
 		google_api('https://spreadsheets.google.com/feeds/spreadsheets/private/full?v=3&alt=json', {}, true, function(data){
 			var docCount = data.feed.openSearch$totalResults;
-			if (docCount == 0)	return _createWalletDoc();
+			if (docCount == 0)	return create_wallet_doc();
 			
-			var entries = data.feed.entry;
-			var i = entries.length;
+			var entries = data.feed.entry;	var i = entries.length;
 			while (i--) {
-				d(entries[i].title);
 				if (entries[i].title.$t == goCoinWalletFilename) {
-					walletDocID = entries[i].id.$t;
-					wallet_init();
-					d(entries[i]);
-					return;
+					var entriesb = entries[i].link;	var j = entries.length;
+					while (j--) {
+						if (entriesb[j].rel == "alternate" && entriesb[j].type == "text/html") {
+							walletDocID = entriesb[j].href.split("=", 2)[1];
+							d("Wallet file found.");
+							return callBack();
+						}
+					}
 				}
 			}
 			
-			return _createWalletDoc();
+			// create the wallet file, as it does not exist
+			d("Wallet file not found. Creating new wallet file...");
+			google_api('https://docs.google.com/feeds/default/private/full?v=3&alt=json', {}, true, function(data){
+				var rcm_link = null;
+			
+				var links = data.feed.link;
+				var i = links.length;
+				while (i--) {
+					if (links[i].rel == "http://schemas.google.com/g/2005#resumable-create-media") {
+						rcm_link = links[i].href;
+						break;	
+					}	
+				}
+			
+				var message = "WARNING!,WARNING!,WARNING!,WARNING!,WARNING!,WARNING!,WARNING!,WARNING!,WARNING!,WARNING!\nYOU,WILL,LOSE,YOUR,BITCOINS,IF,YOU,MODIFY,THIS,FILE!";
+				var metadata = '<?xml version="1.0" encoding="UTF-8"?><entry xmlns="http://www.w3.org/2005/Atom" xmlns:docs="http://schemas.google.com/docs/2007"><category scheme="http://schemas.google.com/g/2005#kind" term="http://schemas.google.com/docs/2007#spreadsheet"/><title>' + goCoinWalletFilename + '</title></entry>';
+  				google_api_post(rcm_link, metadata, "application/atom+xml", {"X-Upload-Content-Length": "" + (message.length), "X-Upload-Content-Type": "text/csv"}, function(data) {			
+	  				google_api_put(data, message, 0, "text/csv", message.length, {}, function(data) {
+						d("Wallet file created!");
+		  				return get_wallet_doc(callBack);
+					});
+  				});	
+			});
 		});		
 	}
 	
-	/* Creates and returns the Wallet spreadsheet Document ID
-	 * ONLY TO BE INVOKED WHEN NO WALLET EXISTS *
+	
+	/* Get data from a cell
 	 */
-	function _createWalletDoc() {
-		d('Creating wallet');
-		//Get the resumable-create-media link (this should not be hardcoded, hence the extra request
-		google_api('https://docs.google.com/feeds/default/private/full?v=3&alt=json', {}, true, function(data){
-			var rcm_link = null;
-			
-			var links = data.feed.link;
-			var i = links.length;
+	function wallet_get_cell(row, col, callBack) {
+		var editurl = 'https://spreadsheets.google.com/feeds/cells/' + walletDocID + '/' + walletWorkSheetID + '/private/full/R' + row + 'C' + col + '?v=3&alt=json';
+		google_api(editurl, {}, true, function(data) {
+			return callBack(dojo.fromJson(dojox.encoding.crypto.SimpleAES.decrypt(data.entry.gs$cell.inputValue, userPin)));
+		});
+	}
+	
+	
+		
+	/* Put data in a cell 
+	 */
+	function wallet_put_cell(row, col, data, callBack) {
+		var datacode = dojox.encoding.crypto.SimpleAES.encrypt(dojo.toJson(data), userPin);
+		var editurl = 'https://spreadsheets.google.com/feeds/cells/' + walletDocID + '/' + walletWorkSheetID + '/private/full/R' + row + 'C' + col + '?v=3';
+		var message = '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:gs="http://schemas.google.com/spreadsheets/2006"><id>' + editurl.replace("?v=3", "") + '</id><link rel="edit" type="application/atom+xml" href="' + editurl + '"/><gs:cell row="' + row + '" col="' + col + '" inputValue="' + datacode + '"/></entry>';
+
+		google_api_put(editurl, message, 0, "application/atom+xml", message.length, {"If-None-Match": "DEADBEEF", "Content-Range": null}, function(data) {
+			return callBack(data);
+		});	
+		
+
+		/* // oak tree:	Editurl may change in the future. If so use the below commented out code to query the cell 
+		 * 				and get the edit link from the returned data.
+		 *	google_api(cellurl, {}, true, function(data) {
+		 *		d("queried cell at " + row + ", " + col);
+		 *		var entries = data.entry.link; var i = entries.length;
+		 *		while (i--) {
+		 *			if (entries[i].rel == "edit") {
+		 *				var editurl = entries[i].href;
+		 *				// do main code here
+		 *			}	
+		 *		}
+		 *	});
+		 * // end oak-tree --	When buildings were once made of oak, an oak tree would be planted beside the building.
+		 * //				-	Thus, one hundred years hence, when the building needed repair, oak would be avaliable.
+		 */					
+	}
+	
+	
+	
+	
+	/* Validates the wallet spreadsheet (checks checksums, ensures the correct worksheets are there, etc.)
+	 * 	Assumes wallet file is already found/created and that walletDocID is populated with the doc key.
+	 */
+	function validate_wallet_doc(callBack) {
+		// first find and set the walletWorkSheetID
+		d("Validating user's wallet file...");
+		google_api('https://spreadsheets.google.com/feeds/worksheets/' + walletDocID + '/private/full?v=3&alt=json', {}, true, function(data){
+			var entries = data.feed.entry; var i = entries.length;
 			while (i--) {
-				if (links[i].rel == "http://schemas.google.com/g/2005#resumable-create-media") {
-					rcm_link = links[i].href;
-					break;	
+				if (entries[i].title.$t == goCoinWalletWorksheetName) {			
+					var tmp = (entries[i].id.$t + "").split("/");
+					walletWorkSheetID = tmp[tmp.length - 1];
+
+					// get the post url for the worksheet
+					google_api('https://spreadsheets.google.com/feeds/list/' + walletDocID + '/' + walletWorkSheetID + '/private/full?v=3&alt=json', {}, true, function(data){
+						var entries = data.feed.link; var i = entries.length;
+						while (i--) {
+							if (entries[i].rel == "http://schemas.google.com/g/2005#post") {
+								walletWorkSheetPostURL = entries[i].href;
+								d("Wallet is valid.");
+								// todo: more validation stuff here
+								return callBack();
+							}
+						}	
+					});
 				}	
 			}
 			
-			d('rcm_link: ' + rcm_link);
-			
-			var message = "WARNING!!! DO NOT TOUCH THIS FILE. YOU WILL LOSE YOUR BITCOINS IF YOU DO!";
-
-  			google_api_post(rcm_link, '<?xml version="1.0" encoding="UTF-8"?>\
-<entry xmlns="http://www.w3.org/2005/Atom" xmlns:docs="http://schemas.google.com/docs/2007">\
-<category scheme="http://schemas.google.com/g/2005#kind" term="http://schemas.google.com/docs/2007#spreadsheet"/>\
-<title>' + goCoinWalletFilename + '</title></entry>', "application/atom+xml", {"X-Upload-Content-Length": "" + (message.length), "X-Upload-Content-Type": "text/csv"}, function(data) {
-			
-				console.log("data: '" + data + "'");
-				google_api_put(data, message, 0, "text/csv", message.length, {}, function(data) {
-					console.log("data: '" + data + "'");
-					getWalletDocID();
-				});
-	
-	  			
-  			});
-					
+			if (walletWorkSheetID == null) {
+				d("Wallet was invalid. Repairing...");
+				if (walletWorkSheetID == null) {
+					// wallet worksheet needs to be created
+					var message = '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:gs="http://schemas.google.com/spreadsheets/2006"><title>' + goCoinWalletWorksheetName + '</title><gs:rowCount>50</gs:rowCount><gs:colCount>10</gs:colCount></entry>';
+					google_api_post('https://spreadsheets.google.com/feeds/worksheets/' + walletDocID + '/private/full', message, "application/atom+xml", {}, function(data) {
+						validate_wallet_doc(callBack);
+					});
+				}
+			}
 		});
+	
 	}
 	
 	/* Init the GoCoin application with an oAuth 2.0 token
@@ -243,19 +317,21 @@
 	 */
 	function gocoin_init(token) {
 		oAuthToken = token;
-		getWalletDocID();
+		get_wallet_doc(function() {
+			validate_wallet_doc(function(){
+				wallet_put_cell(3,5, "this is a test", function(data){
+					wallet_get_cell(3,5,function(data){
+						d(data);
+					});
+				});
+			});
+		}); 
 	}
+
+
 	
-	/* Init the GoCoin wallet 
-	 * This init is called after the wallet file has been found/created
-	 */
-	function wallet_init() {
-		d(walletDocID);
-		
-	}
 
-
-   require(["dojo/dom", "dojo/_base/xhr", "dojox/widget/Toaster",  "dojo/domReady!"], function(dom){
+   require(["dojo/dom", "dojo/_base/xhr", "dojox/widget/Toaster", "dojox/encoding/crypto/SimpleAES", "dojo/domReady!"], function(dom){
    	(function() {
 	 var GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth";
 	 var GOOGLE_CLIENT_ID = "988326713233-10of7p94959dk7knfmgnu7lj20rels21.apps.googleusercontent.com";
